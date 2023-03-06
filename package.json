@@ -1,0 +1,20 @@
+
+{
+  "name": "hello-world",
+  "version": "1.0.0",
+  "description": "Hello World app for AWS Lambda",
+  "main": "index.js",
+  "dependencies": {},
+  "devDependencies": {
+    "aws-sdk": "^2.968.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mukeshsaini143/hello-world.git"
+  },
+  "author": "mukeshsaini143",
+  "license": "ISC"
+}
