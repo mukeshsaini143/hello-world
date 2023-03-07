@@ -1,22 +1,30 @@
-# Define the AWS provider
+# Define the provider
 provider "aws" {
   region = "us-east-1"
 }
 
-# Define the S3 bucket to store the Lambda function code
-resource "aws_s3_bucket" "lambda_bucket" {
-  bucket = "my-hello-world-lambda-bucket"
+# Define the variables
+variable "app_name" {
+  default = "my-node-app"
+}
+
+variable "github_repo_url" {
+  default = "https://github.com/your-username/my-node-app.git"
+}
+
+variable "github_branch" {
+  default = "main"
+}
+
+# Define the S3 bucket
+resource "aws_s3_bucket" "artifact_bucket" {
+  bucket = "${var.app_name}-artifact-bucket"
   acl    = "private"
 }
 
-# Create a CodeCommit repository to store the application code
-resource "aws_codecommit_repository" "hello_world" {
-  repository_name = "hello-world"
-}
-
-# Define the IAM role for the CodeBuild project
-resource "aws_iam_role" "codebuild_role" {
-  name = "my-codebuild-role"
+# Define the IAM role for CodePipeline
+resource "aws_iam_role" "codepipeline_role" {
+  name = "${var.app_name}-codepipeline-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -25,57 +33,32 @@ resource "aws_iam_role" "codebuild_role" {
         Action = "sts:AssumeRole"
         Effect = "Allow"
         Principal = {
-          Service = "codebuild.amazonaws.com"
+          Service = "codepipeline.amazonaws.com"
         }
       }
     ]
   })
 }
 
-# Attach an IAM policy to the CodeBuild role to grant access to the S3 bucket
-resource "aws_iam_role_policy_attachment" "codebuild_s3_policy_attachment" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-  role       = aws_iam_role.codebuild_role.name
+# Define the IAM policy for CodePipeline
+resource "aws_iam_policy" "codepipeline_policy" {
+  name        = "${var.app_name}-codepipeline-policy"
+  policy      = file("${path.module}/policies/codepipeline_policy.json")
+  description = "IAM policy for CodePipeline"
 }
 
-# Define the CodeBuild project to build the Node.js application and package it for deployment to Lambda
-resource "aws_codebuild_project" "hello_world_build" {
-  name       = "hello-world-build"
-  service_role = aws_iam_role.codebuild_role.arn
-
-  artifacts {
-    type = "zip"
-    name = "lambda-deployment-package"
-
-    location = aws_s3_bucket.lambda_bucket.bucket
-    path     = "hello-world/lambda-deployment-package.zip"
-  }
-
-  environment {
-    compute_type = "BUILD_GENERAL1_SMALL"
-    image        = "aws/codebuild/standard:5.0"
-    type         = "LINUX_CONTAINER"
-  }
-
-  source {
-    type = "CODECOMMIT"
-
-    location = aws_codecommit_repository.hello_world.repository_clone_url_http
-    buildspec = "hello-world/buildspec.yml"
-  }
-
-  cache {
-    type = "S3"
-    location = "my-hello-world-build-cache"
-  }
+# Attach the IAM policy to the CodePipeline role
+resource "aws_iam_role_policy_attachment" "codepipeline_policy_attachment" {
+  policy_arn = aws_iam_policy.codepipeline_policy.arn
+  role       = aws_iam_role.codepipeline_role.name
 }
 
-# Define the CodePipeline to deploy the Lambda function and create the API Gateway endpoint
-resource "aws_codepipeline" "hello_world_deploy" {
-  name = "hello-world-deploy"
+# Define the CodePipeline pipeline
+resource "aws_codepipeline" "my_node_app_pipeline" {
+  name = "${var.app_name}-pipeline"
 
   artifact_store {
-    location = aws_s3_bucket.lambda_bucket.bucket
+    location = aws_s3_bucket.artifact_bucket.bucket
     type     = "S3"
   }
 
@@ -87,13 +70,16 @@ resource "aws_codepipeline" "hello_world_deploy" {
     action {
       name            = "Source"
       category        = "Source"
-      owner           = "AWS"
-      provider        = "CodeCommit"
+      owner           = "ThirdParty"
+      provider        = "GitHub"
       version         = "1"
-      output_artifacts = ["hello_world_app"]
+      output_artifacts = ["source_output"]
 
       configuration = {
-        RepositoryName = aws_codecommit_repository.hello_world.repository_name
+        Owner      = "your-username"
+        Repo       = "my-node-app"
+        Branch     = "main"
+        OAuthToken = var.github_access_token
       }
     }
   }
@@ -106,12 +92,38 @@ resource "aws_codepipeline" "hello_world_deploy" {
       category        = "Build"
       owner           = "AWS"
       provider        = "CodeBuild"
-      version         = "1"
-      input_artifacts = ["hello_world_app"]
-      output_artifacts = ["lambda_deployment_package"]
+      input_artifacts = ["source_output"]
+      output_artifacts = ["build_output"]
 
       configuration = {
-        ProjectName = aws_codebuild_project.hello_world_build.name
+        ProjectName = aws_codebuild_project.my_node_app_build_project.name
       }
     }
   }
+
+  stage {
+    name = "Deploy"
+
+    action {
+      name            = "Deploy"
+      category        = "Deploy"
+      owner           = "AWS"
+      provider        = "CloudFormation"
+      input_artifacts = ["build_output"]
+      configuration   = file("${path.module}/templates/cloudformation_deploy.json")
+    }
+  }
+}
+
+# Define the CodeBuild project
+resource "aws_codebuild_project" "my_node_app_build_project" {
+  name = "${var.app_name}-build-project"
+
+  service_role = aws_iam_role.codebuild_service_role.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL
